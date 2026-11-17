@@ -1,0 +1,271 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // =========================================================================
+    // AUTHENTICATION & AUTHORIZATION HELPERS
+    // =========================================================================
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && (
+        request.auth.uid == userId ||
+        userId == ('fb_teacher_' + request.auth.uid)
+      );
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == 'kkumariinstitute@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isNonEmptyString(val, maxLen) {
+      return val is string && val.size() > 0 && val.size() <= maxLen;
+    }
+
+    // =========================================================================
+    // ADMIN ACCOUNTS & AUDIT LOGS
+    // =========================================================================
+    match /admins/{adminId} {
+      allow read: if isOwner(adminId) || isAdmin();
+      allow write: if isAdmin();
+    }
+
+    match /activity_logs/{logId} {
+      allow read, write: if isAdmin();
+    }
+
+    // =========================================================================
+    // USER PROFILES (PARENTS & TEACHERS)
+    // =========================================================================
+    match /parents/{parentId} {
+      allow read: if isOwner(parentId) || isAdmin();
+      allow create: if isAdmin() || (
+        isOwner(parentId) &&
+        (!('role' in request.resource.data) || request.resource.data.role == 'parent')
+      );
+      allow update: if isAdmin() || (
+        isOwner(parentId) &&
+        (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['role']) ||
+          request.resource.data.role == resource.data.role)
+      );
+      allow delete: if isAdmin();
+    }
+
+    match /teachers/{teacherId} {
+      // Public tutor directory discovery
+      allow read: if true;
+      allow create: if isAdmin() || (
+        isOwner(teacherId) &&
+        (!('role' in request.resource.data) || request.resource.data.role == 'teacher') &&
+        (!('verified' in request.resource.data) || request.resource.data.verified == false) &&
+        (!('isApproved' in request.resource.data) || request.resource.data.isApproved == false)
+      );
+      allow update: if isAdmin() || (
+        isOwner(teacherId) &&
+        (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'verified', 'isApproved']) || (
+          request.resource.data.get('verified', false) == resource.data.get('verified', false) &&
+          request.resource.data.get('isApproved', false) == resource.data.get('isApproved', false) &&
+          request.resource.data.get('role', 'teacher') == resource.data.get('role', 'teacher')
+        ))
+      );
+      allow delete: if isAdmin();
+    }
+
+    match /tutors_requests/{tutorRequestId} {
+      allow read: if isOwner(tutorRequestId) || isAdmin();
+      allow create, update: if isOwner(tutorRequestId) || isAdmin();
+      allow delete: if isOwner(tutorRequestId) || isAdmin();
+    }
+
+    match /complete_tutors/{tutorId} {
+      allow read: if true;
+      allow create: if isAdmin() || (
+        isOwner(tutorId) &&
+        (!('verified' in request.resource.data) || request.resource.data.verified == false) &&
+        (!('isApproved' in request.resource.data) || request.resource.data.isApproved == false)
+      );
+      allow update: if isAdmin() || (
+        isOwner(tutorId) &&
+        (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['verified', 'isApproved']) || (
+          request.resource.data.get('verified', false) == resource.data.get('verified', false) &&
+          request.resource.data.get('isApproved', false) == resource.data.get('isApproved', false)
+        ))
+      );
+      allow delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // HOME TUTOR BOOKINGS & FEE LEDGERS
+    // =========================================================================
+    match /incoming_bookings/{bookingId} {
+      allow read: if isAdmin() || (isSignedIn() && (
+        resource.data.parentUid == request.auth.uid ||
+        resource.data.requestedTutorId == request.auth.uid
+      ));
+      allow create: if isAdmin() || (
+        isSignedIn() &&
+        request.resource.data.parentUid == request.auth.uid &&
+        isNonEmptyString(request.resource.data.studentName, 120)
+      );
+      allow update, delete: if isAdmin();
+    }
+
+    match /tutor_bookings/{bookingId} {
+      allow read: if isAdmin() || (isSignedIn() && (
+        resource.data.parentUid == request.auth.uid ||
+        resource.data.requestedTutorId == request.auth.uid ||
+        resource.data.assignedTutorId == request.auth.uid ||
+        (request.auth.token.email != null && resource.data.parentEmail == request.auth.token.email)
+      ));
+      allow create: if isAdmin() || (
+        isSignedIn() &&
+        request.resource.data.parentUid == request.auth.uid &&
+        isNonEmptyString(request.resource.data.studentName, 120)
+      );
+      allow update, delete: if isAdmin();
+    }
+
+    match /received_fees/{feeId} {
+      allow read: if isAdmin() || (isSignedIn() && (
+        resource.data.parentUid == request.auth.uid ||
+        resource.data.tutorId == request.auth.uid ||
+        (request.auth.token.email != null && resource.data.parentEmail == request.auth.token.email)
+      ));
+      allow create: if isAdmin() || (
+        isSignedIn() &&
+        request.resource.data.parentUid == request.auth.uid &&
+        request.resource.data.amount is number &&
+        request.resource.data.amount > 0
+      );
+      allow update, delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // TUTOR WITHDRAWALS & PAYOUTS
+    // =========================================================================
+    match /withdrawal_notices/{noticeId} {
+      allow read: if isAdmin() || (isSignedIn() && (
+        resource.data.tutorId == request.auth.uid ||
+        (request.auth.token.email != null && resource.data.tutorEmail == request.auth.token.email)
+      ));
+      allow create: if isAdmin() || (
+        isSignedIn() &&
+        request.resource.data.tutorId == request.auth.uid &&
+        request.resource.data.amount is number &&
+        request.resource.data.amount >= 1
+      );
+      allow update, delete: if isAdmin();
+    }
+
+    match /withdrawal_requests/{requestId} {
+      allow read: if isAdmin() || (isSignedIn() && (
+        resource.data.tutorId == request.auth.uid ||
+        (request.auth.token.email != null && resource.data.tutorEmail == request.auth.token.email)
+      ));
+      allow create: if isAdmin() || (
+        isSignedIn() &&
+        request.resource.data.tutorId == request.auth.uid &&
+        request.resource.data.amount is number &&
+        request.resource.data.amount >= 1
+      );
+      allow update, delete: if isAdmin();
+    }
+
+    match /complete_withdrawals/{withdrawalId} {
+      allow read: if isAdmin() || (isSignedIn() && (
+        resource.data.tutorId == request.auth.uid ||
+        (request.auth.token.email != null && resource.data.tutorEmail == request.auth.token.email)
+      ));
+      allow write: if isAdmin();
+    }
+
+    // =========================================================================
+    // REVIEWS, PUBLIC LEADS & NEWSLETTER
+    // =========================================================================
+    match /tutors_reviews/{reviewId} {
+      allow read: if true;
+      allow create: if isAdmin() || (
+        isSignedIn() &&
+        isNonEmptyString(request.resource.data.tutorId, 128) &&
+        isNonEmptyString(request.resource.data.comment, 2000) &&
+        request.resource.data.rating is number &&
+        request.resource.data.rating >= 1 &&
+        request.resource.data.rating <= 5
+      );
+      allow update, delete: if isAdmin();
+    }
+
+    match /demo_bookings/{bookingId} {
+      allow read: if isAdmin() || (isSignedIn() && (
+        resource.data.userId == request.auth.uid ||
+        resource.data.teacherId == request.auth.uid ||
+        resource.data.assignedTeacherId == request.auth.uid ||
+        (request.auth.token.email != null && resource.data.email == request.auth.token.email)
+      ));
+      allow create: if isNonEmptyString(request.resource.data.studentName, 120) &&
+        isNonEmptyString(request.resource.data.phone, 40);
+      allow update, delete: if isAdmin();
+    }
+
+    match /offline_demo_queries/{queryId} {
+      allow read: if isAdmin();
+      allow create: if isNonEmptyString(request.resource.data.phone, 40);
+      allow update, delete: if isAdmin();
+    }
+
+    match /enquiries/{enquiryId} {
+      allow read: if isAdmin();
+      allow create: if isNonEmptyString(request.resource.data.name, 120) &&
+        isNonEmptyString(request.resource.data.message, 2500);
+      allow update, delete: if isAdmin();
+    }
+
+    match /newsletter_subscribers/{subscriberId} {
+      allow read: if isAdmin();
+      allow create: if isNonEmptyString(request.resource.data.email, 200);
+      allow update, delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // CMS COLLECTIONS (PUBLIC READ, ADMIN WRITE)
+    // =========================================================================
+    match /gallery/{itemId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /gallery_manager/{itemId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /gallery_items/{itemId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /success_stories/{storyId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /hero_banners/{bannerId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /offers/{offerId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Connectivity probe document
+    match /_probe/{probeId} {
+      allow read: if true;
+    }
+  }
+}

@@ -1,0 +1,381 @@
+{
+  "entities": {
+    "admins": {
+      "title": "Admins Registry",
+      "description": "Authorized institute administrators with full governance access",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID of admin" },
+        "email": { "type": "string", "description": "Administrator email address" },
+        "name": { "type": "string", "description": "Administrator display name" },
+        "role": { "type": "string", "description": "Role (admin)" },
+        "createdAt": { "type": "string", "description": "ISO timestamp" }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "parents": {
+      "title": "Parents Directory",
+      "description": "Registered parents with student details, booked tutors, enrolled courses, fees, and assigned tutor",
+      "properties": {
+        "uid": { "type": "string", "description": "Parent UID" },
+        "fullName": { "type": "string", "description": "Parent full name" },
+        "name": { "type": "string", "description": "Parent display name" },
+        "email": { "type": "string", "description": "Parent email address" },
+        "phone": { "type": "string", "description": "Parent phone number" },
+        "childName": { "type": "string", "description": "Student name" },
+        "childGrade": { "type": "string", "description": "Grade / Standard of student" },
+        "childBoard": { "type": "string", "description": "Educational board (CBSE, ICSE, BSE Odisha)" },
+        "childSchool": { "type": "string", "description": "Student school name" },
+        "locality": { "type": "string", "description": "Residence locality in Rayagada" },
+        "bookedTutors": { "type": "array", "description": "Booked tutors history" },
+        "hiredTutors": { "type": "array", "description": "Assigned tutors history" },
+        "enrolledCourses": { "type": "array", "description": "Enrolled institute courses" },
+        "assignedEducator": { "type": "object", "description": "Primary assigned home tutor" },
+        "role": { "type": "string", "description": "User role (parent)" },
+        "createdAt": { "type": "string", "description": "Registration ISO timestamp" }
+      },
+      "required": ["uid", "email"]
+    },
+    "teachers": {
+      "title": "Teachers Directory",
+      "description": "Registered faculty and home tutors with KYC status, qualifications, fee structure, and assigned students",
+      "properties": {
+        "uid": { "type": "string", "description": "Teacher Auth UID" },
+        "id": { "type": "string", "description": "Teacher document ID" },
+        "name": { "type": "string", "description": "Tutor full name" },
+        "email": { "type": "string", "description": "Tutor email" },
+        "phone": { "type": "string", "description": "Tutor phone" },
+        "locationArea": { "type": "string", "description": "Locality in Rayagada" },
+        "subjects": { "type": "array", "items": { "type": "string" }, "description": "Subjects taught" },
+        "classesHandled": { "type": "array", "items": { "type": "string" }, "description": "Classes 1st to 12th handled" },
+        "feeStructure": { "type": "object", "description": "Board & class structured monthly tuition fees" },
+        "monthlyFee": { "type": "number", "description": "Starting monthly fee in INR" },
+        "hourlyRate": { "type": "number", "description": "Derived hourly rate in INR" },
+        "availableTimeSlots": { "type": "array", "items": { "type": "string" }, "description": "Available 1-hour time slots" },
+        "verified": { "type": "boolean", "description": "Whether tutor is verified genuine" },
+        "isApproved": { "type": "boolean", "description": "Admin approval flag" },
+        "status": { "type": "string", "description": "pending | approved | rejected" },
+        "role": { "type": "string", "description": "User role (teacher)" }
+      },
+      "required": ["name", "email", "role"]
+    },
+    "tutors_requests": {
+      "title": "Tutors Requests",
+      "description": "Initial tutor registrations pending profile completion, removed once profile is completed",
+      "properties": {
+        "uid": { "type": "string", "description": "Tutor applicant UID" },
+        "name": { "type": "string", "description": "Tutor applicant full name" },
+        "email": { "type": "string", "description": "Email address" },
+        "phone": { "type": "string", "description": "Contact number" },
+        "locationArea": { "type": "string", "description": "Locality in Rayagada" },
+        "status": { "type": "string", "description": "Status (pending_profile, under_review)" },
+        "profileCompleted": { "type": "boolean", "description": "Profile completion state" },
+        "createdAt": { "type": "string", "description": "Registration timestamp" }
+      },
+      "required": ["name", "email"]
+    },
+    "complete_tutors": {
+      "title": "Complete Tutors",
+      "description": "Profile-completed tutors with available timings, fee structure, and assigned parents",
+      "properties": {
+        "id": { "type": "string", "description": "Unique tutor ID" },
+        "uid": { "type": "string", "description": "Tutor Auth UID" },
+        "name": { "type": "string", "description": "Tutor full name" },
+        "email": { "type": "string", "description": "Tutor email address" },
+        "phone": { "type": "string", "description": "Tutor phone number" },
+        "locationArea": { "type": "string", "description": "Rayagada locality area" },
+        "subjects": { "type": "array", "items": { "type": "string" }, "description": "Subjects taught" },
+        "classesHandled": { "type": "array", "items": { "type": "string" }, "description": "Class grades handled" },
+        "monthlyFee": { "type": "number", "description": "Monthly fee in INR" },
+        "feeStructure": { "type": "object", "description": "Class & board fee matrix" },
+        "availableTimeSlots": { "type": "array", "items": { "type": "string" }, "description": "Available tutoring slots" },
+        "assignedStudents": { "type": "array", "description": "Assigned students list" },
+        "status": { "type": "string", "description": "Verification status" },
+        "profileCompleted": { "type": "boolean", "description": "Profile completion state" }
+      },
+      "required": ["name", "email"]
+    },
+    "incoming_bookings": {
+      "title": "Incoming Bookings",
+      "description": "Incoming tutor booking requests from parents, removed upon acceptance and assignment",
+      "properties": {
+        "id": { "type": "string", "description": "Booking identifier" },
+        "parentUid": { "type": "string", "description": "Parent user ID" },
+        "parentName": { "type": "string", "description": "Parent full name" },
+        "parentPhone": { "type": "string", "description": "Parent contact phone number" },
+        "parentEmail": { "type": "string", "description": "Parent email address" },
+        "studentName": { "type": "string", "description": "Student full name" },
+        "studentGrade": { "type": "string", "description": "Student school class/grade" },
+        "subjects": { "type": "array", "items": { "type": "string" }, "description": "Subjects requested" },
+        "address": { "type": "string", "description": "Home tuition address in Rayagada" },
+        "locality": { "type": "string", "description": "Locality name" },
+        "preferredTimeSlot": { "type": "string", "description": "Preferred study time" },
+        "requestedTutorId": { "type": "string", "description": "Target tutor ID" },
+        "requestedTutorName": { "type": "string", "description": "Target tutor name" },
+        "requestedTutorMonthlyFee": { "type": "number", "description": "Monthly fee in INR" },
+        "status": { "type": "string", "description": "Status (pending, accepted, declined)" },
+        "createdAt": { "type": "string", "description": "ISO timestamp" }
+      },
+      "required": ["parentName", "parentPhone", "studentName", "requestedTutorId"]
+    },
+    "tutor_bookings": {
+      "title": "Tutor Bookings",
+      "description": "Master home tutor trial and assignment booking records",
+      "properties": {
+        "id": { "type": "string", "description": "Booking ID" },
+        "parentUid": { "type": "string", "description": "Parent UID" },
+        "parentName": { "type": "string", "description": "Parent name" },
+        "parentPhone": { "type": "string", "description": "Parent phone" },
+        "studentName": { "type": "string", "description": "Student name" },
+        "requestedTutorId": { "type": "string", "description": "Requested tutor ID" },
+        "assignedTutorId": { "type": "string", "description": "Final assigned tutor ID" },
+        "assignedTutorFee": { "type": "number", "description": "Monthly fee agreed in INR" },
+        "status": { "type": "string", "description": "pending | accepted | reassigned | declined" },
+        "createdAt": { "type": "string", "description": "ISO timestamp" }
+      },
+      "required": ["parentUid", "studentName", "status"]
+    },
+    "received_fees": {
+      "title": "Received Fees",
+      "description": "Razorpay and desk fee payment receipts from parents for 30-day tuition cycles",
+      "properties": {
+        "id": { "type": "string", "description": "Record ID (receiptNo)" },
+        "receiptNo": { "type": "string", "description": "Formatted receipt number" },
+        "parentUid": { "type": "string", "description": "Payer parent UID" },
+        "tutorId": { "type": "string", "description": "Beneficiary tutor ID" },
+        "studentName": { "type": "string", "description": "Student name" },
+        "amount": { "type": "number", "description": "Gross paid amount in INR" },
+        "paymentMethod": { "type": "string", "description": "Payment mode" },
+        "razorpayPaymentId": { "type": "string", "description": "Verified Razorpay payment ID" },
+        "status": { "type": "string", "description": "paid | completed" },
+        "paidAt": { "type": "string", "description": "ISO payment timestamp" }
+      },
+      "required": ["receiptNo", "parentUid", "amount", "paidAt"]
+    },
+    "withdrawal_notices": {
+      "title": "Withdrawal Notices",
+      "description": "Tutor payout withdrawal requests pending admin approval",
+      "properties": {
+        "id": { "type": "string", "description": "Withdrawal request ID" },
+        "tutorId": { "type": "string", "description": "Tutor ID" },
+        "tutorName": { "type": "string", "description": "Tutor full name" },
+        "amount": { "type": "number", "description": "Requested withdrawal amount in INR" },
+        "paymentMethod": { "type": "string", "description": "upi or bank_transfer" },
+        "status": { "type": "string", "description": "pending" },
+        "createdAt": { "type": "string", "description": "Request creation ISO timestamp" }
+      },
+      "required": ["tutorId", "tutorName", "amount", "paymentMethod"]
+    },
+    "withdrawal_requests": {
+      "title": "Withdrawal Requests",
+      "description": "Unified tutor payout requests ledger",
+      "properties": {
+        "id": { "type": "string", "description": "Request ID" },
+        "tutorId": { "type": "string", "description": "Tutor ID" },
+        "tutorName": { "type": "string", "description": "Tutor full name" },
+        "amount": { "type": "number", "description": "Requested amount in INR" },
+        "paymentMethod": { "type": "string", "description": "upi or bank_transfer" },
+        "status": { "type": "string", "description": "pending | approved | rejected" },
+        "createdAt": { "type": "string", "description": "ISO timestamp" }
+      },
+      "required": ["tutorId", "tutorName", "amount", "paymentMethod"]
+    },
+    "complete_withdrawals": {
+      "title": "Complete Withdrawals",
+      "description": "Accepted and settled tutor withdrawal requests with UTR proof",
+      "properties": {
+        "id": { "type": "string", "description": "Settled withdrawal ID" },
+        "tutorId": { "type": "string", "description": "Tutor ID" },
+        "tutorName": { "type": "string", "description": "Tutor name" },
+        "transferredAmount": { "type": "number", "description": "Final transferred amount in INR" },
+        "transferMethod": { "type": "string", "description": "UPI Transfer / NEFT / IMPS" },
+        "utrNumber": { "type": "string", "description": "Bank UTR reference" },
+        "status": { "type": "string", "description": "approved" },
+        "approvedAt": { "type": "string", "description": "Settlement timestamp" }
+      },
+      "required": ["tutorId", "transferredAmount", "utrNumber"]
+    },
+    "tutors_reviews": {
+      "title": "Tutors Reviews",
+      "description": "Authentic parent and student reviews for tutors",
+      "properties": {
+        "id": { "type": "string", "description": "Review ID" },
+        "tutorId": { "type": "string", "description": "Associated tutor ID" },
+        "parentName": { "type": "string", "description": "Reviewer parent name" },
+        "rating": { "type": "number", "description": "Rating score (1-5)" },
+        "comment": { "type": "string", "description": "Review text" },
+        "createdAt": { "type": "string", "description": "ISO timestamp" }
+      },
+      "required": ["tutorId", "parentName", "rating", "comment"]
+    },
+    "demo_bookings": {
+      "title": "Demo Bookings",
+      "description": "Free 3-day demo class and exam batch enrollment bookings",
+      "properties": {
+        "id": { "type": "string", "description": "Booking ID" },
+        "studentName": { "type": "string", "description": "Student name" },
+        "phone": { "type": "string", "description": "Parent phone" },
+        "studentClass": { "type": "string", "description": "Class/Grade" },
+        "subject": { "type": "string", "description": "Course or subject" },
+        "mode": { "type": "string", "description": "Offline / Home / Online" },
+        "status": { "type": "string", "description": "Pending | Confirmed" },
+        "createdAt": { "type": "string", "description": "ISO timestamp" }
+      },
+      "required": ["studentName", "phone"]
+    },
+    "offline_demo_queries": {
+      "title": "Offline Demo Queries",
+      "description": "Admissions queries and offline classroom demo requests",
+      "properties": {
+        "id": { "type": "string", "description": "Query identifier" },
+        "studentName": { "type": "string", "description": "Student full name" },
+        "parentName": { "type": "string", "description": "Parent full name" },
+        "phone": { "type": "string", "description": "Parent contact phone" },
+        "grade": { "type": "string", "description": "Class standard" },
+        "subject": { "type": "string", "description": "Subject requested" },
+        "message": { "type": "string", "description": "Enquiry message" },
+        "status": { "type": "string", "description": "Pending | Confirmed | Contacted" },
+        "createdAt": { "type": "string", "description": "ISO timestamp" }
+      },
+      "required": ["phone"]
+    },
+    "enquiries": {
+      "title": "Enquiries",
+      "description": "General admissions callbacks and portal direct messages",
+      "properties": {
+        "id": { "type": "string", "description": "Enquiry ID" },
+        "name": { "type": "string", "description": "Sender name" },
+        "phone": { "type": "string", "description": "Contact phone" },
+        "grade": { "type": "string", "description": "Grade or topic" },
+        "message": { "type": "string", "description": "Enquiry message" },
+        "createdAt": { "type": "string", "description": "ISO timestamp" }
+      },
+      "required": ["name", "message"]
+    },
+    "newsletter_subscribers": {
+      "title": "Newsletter Subscribers",
+      "description": "Parents and students subscribed to exam alerts and study tips",
+      "properties": {
+        "id": { "type": "string", "description": "Subscriber ID" },
+        "email": { "type": "string", "description": "Subscriber email address" },
+        "createdAt": { "type": "string", "description": "ISO timestamp" }
+      },
+      "required": ["email"]
+    },
+    "gallery": {
+      "title": "Gallery",
+      "description": "Public campus, classroom, and student gallery items",
+      "properties": {
+        "id": { "type": "string", "description": "Photo ID" },
+        "title": { "type": "string", "description": "Photo title" },
+        "subtitle": { "type": "string", "description": "Caption" },
+        "category": { "type": "string", "description": "students | classrooms | building | events" },
+        "image": { "type": "string", "description": "Hosted HTTPS image URL" },
+        "createdAt": { "type": "string", "description": "ISO timestamp" }
+      },
+      "required": ["title", "image"]
+    },
+    "gallery_manager": {
+      "title": "Gallery Manager",
+      "description": "Admin gallery registry synchronized with public gallery",
+      "properties": {
+        "id": { "type": "string", "description": "Image identifier" },
+        "title": { "type": "string", "description": "Image title" },
+        "subtitle": { "type": "string", "description": "Short description" },
+        "category": { "type": "string", "description": "Category" },
+        "imageUrl": { "type": "string", "description": "Hosted image URL" },
+        "createdAt": { "type": "string", "description": "ISO timestamp" }
+      },
+      "required": ["title", "imageUrl"]
+    },
+    "gallery_items": {
+      "title": "Gallery Items Mirror",
+      "description": "Companion gallery collection synced for backward compatibility",
+      "properties": {
+        "id": { "type": "string", "description": "Item ID" },
+        "title": { "type": "string", "description": "Title" },
+        "image": { "type": "string", "description": "Image URL" }
+      },
+      "required": ["title", "image"]
+    },
+    "success_stories": {
+      "title": "Success Stories",
+      "description": "Student achievements, exam ranks, and testimonials",
+      "properties": {
+        "id": { "type": "string", "description": "Story identifier" },
+        "studentName": { "type": "string", "description": "Student full name" },
+        "exam": { "type": "string", "description": "Class or competitive exam" },
+        "score": { "type": "string", "description": "Marks, score or rank achieved" },
+        "school": { "type": "string", "description": "School or college name" },
+        "testimonial": { "type": "string", "description": "Success story or testimonial content" },
+        "image": { "type": "string", "description": "Student photograph URL" },
+        "createdAt": { "type": "string", "description": "ISO timestamp" }
+      },
+      "required": ["studentName", "score"]
+    },
+    "hero_banners": {
+      "title": "Hero Banners",
+      "description": "Homepage carousel banners stored in Cloud Firestore",
+      "properties": {
+        "id": { "type": "string", "description": "Banner identifier" },
+        "url": { "type": "string", "description": "Public image URL of the banner" },
+        "title": { "type": "string", "description": "Banner title" },
+        "active": { "type": "boolean", "description": "Whether banner is active in homepage rotation" },
+        "createdAt": { "type": "string", "description": "ISO timestamp" }
+      },
+      "required": ["url"]
+    },
+    "offers": {
+      "title": "Promotional Offers",
+      "description": "Time-bound marquee promotional offers displayed below navbar",
+      "properties": {
+        "id": { "type": "string", "description": "Offer ID" },
+        "title": { "type": "string", "description": "Marquee headline text" },
+        "badge": { "type": "string", "description": "Short tag badge" },
+        "expiryDate": { "type": "string", "description": "YYYY-MM-DD expiry date" },
+        "active": { "type": "boolean", "description": "Active visibility toggle" },
+        "actionType": { "type": "string", "description": "enquiry | demo | tutors | courses | none" }
+      },
+      "required": ["title", "expiryDate"]
+    },
+    "activity_logs": {
+      "title": "Activity Logs",
+      "description": "Institute audit trail for payments, vouchers, demo approvals, and tutor verifications",
+      "properties": {
+        "id": { "type": "string", "description": "Log ID" },
+        "adminName": { "type": "string", "description": "Actor name" },
+        "actionType": { "type": "string", "description": "Event category action" },
+        "category": { "type": "string", "description": "Audit category" },
+        "studentName": { "type": "string", "description": "Student name" },
+        "amount": { "type": "number", "description": "Amount in INR" },
+        "receiptNo": { "type": "string", "description": "Voucher receipt number" },
+        "createdAt": { "type": "string", "description": "ISO timestamp" }
+      },
+      "required": ["id", "actionType", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/admins/{adminId}": { "schema": "admins", "description": "Admin user registry" },
+    "/parents/{parentId}": { "schema": "parents", "description": "Registered parent profiles" },
+    "/teachers/{teacherId}": { "schema": "teachers", "description": "Registered tutor and faculty profiles" },
+    "/tutors_requests/{tutorRequestId}": { "schema": "tutors_requests", "description": "Pending tutor registration requests" },
+    "/complete_tutors/{tutorId}": { "schema": "complete_tutors", "description": "Completed tutor profiles" },
+    "/incoming_bookings/{bookingId}": { "schema": "incoming_bookings", "description": "Pending incoming booking queue" },
+    "/tutor_bookings/{bookingId}": { "schema": "tutor_bookings", "description": "Master home tutor bookings" },
+    "/received_fees/{feeId}": { "schema": "received_fees", "description": "Verified fee payment receipts" },
+    "/withdrawal_notices/{noticeId}": { "schema": "withdrawal_notices", "description": "Pending tutor withdrawal notices" },
+    "/withdrawal_requests/{requestId}": { "schema": "withdrawal_requests", "description": "Tutor withdrawal requests" },
+    "/complete_withdrawals/{withdrawalId}": { "schema": "complete_withdrawals", "description": "Settled tutor withdrawals" },
+    "/tutors_reviews/{reviewId}": { "schema": "tutors_reviews", "description": "Parent reviews for tutors" },
+    "/demo_bookings/{bookingId}": { "schema": "demo_bookings", "description": "Free demo class bookings" },
+    "/offline_demo_queries/{queryId}": { "schema": "offline_demo_queries", "description": "Offline class & demo enquiries" },
+    "/enquiries/{enquiryId}": { "schema": "enquiries", "description": "General enquiries and portal messages" },
+    "/newsletter_subscribers/{subscriberId}": { "schema": "newsletter_subscribers", "description": "Newsletter subscriber emails" },
+    "/gallery/{itemId}": { "schema": "gallery", "description": "Public gallery photos" },
+    "/gallery_manager/{itemId}": { "schema": "gallery_manager", "description": "Admin gallery registry" },
+    "/gallery_items/{itemId}": { "schema": "gallery_items", "description": "Companion gallery mirror" },
+    "/success_stories/{storyId}": { "schema": "success_stories", "description": "Student toppers and testimonials" },
+    "/hero_banners/{bannerId}": { "schema": "hero_banners", "description": "Homepage carousel banners" },
+    "/offers/{offerId}": { "schema": "offers", "description": "Active promotional offers" },
+    "/activity_logs/{logId}": { "schema": "activity_logs", "description": "Admin payment and audit trail logs" }
+  }
+}
