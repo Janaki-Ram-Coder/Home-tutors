@@ -3,9 +3,9 @@ import { getAuth } from "firebase/auth";
 import { initializeFirestore, getFirestore, doc, getDocFromServer, setLogLevel, Firestore } from "firebase/firestore";
 import { getAnalytics, isSupported } from "firebase/analytics";
 
-// Silence noisy internal network retry messages from the Firebase SDK
+// Keep fatal Firestore errors visible while avoiding verbose internal retry noise
 try {
-  setLogLevel("silent");
+  setLogLevel("error");
 } catch {
   // Ignore if already set
 }
@@ -31,7 +31,8 @@ export const auth = getAuth(app);
 
 /**
  * Cloud Firestore Database Instance.
- * Connected to database '(default)'.
+ * Connected to database '(default)' with forced long-polling for maximum reliability
+ * across iframes, mobile carriers, and proxied environments where WebChannel can stall.
  */
 export const FIRESTORE_DATABASE_ID = "(default)";
 
@@ -40,7 +41,7 @@ try {
   firestoreInstance = initializeFirestore(
     app,
     {
-      experimentalAutoDetectLongPolling: true,
+      experimentalForceLongPolling: true,
     }
   );
 } catch {
@@ -48,6 +49,65 @@ try {
 }
 
 export const db = firestoreInstance;
+
+/**
+ * Decode a single Cloud Firestore REST API typed value into a plain JavaScript value.
+ */
+export function decodeFirestoreRestValue(val: any): any {
+  if (!val || typeof val !== "object") return undefined;
+  if ("stringValue" in val) return val.stringValue;
+  if ("booleanValue" in val) return Boolean(val.booleanValue);
+  if ("integerValue" in val) return Number(val.integerValue);
+  if ("doubleValue" in val) return Number(val.doubleValue);
+  if ("timestampValue" in val) return val.timestampValue;
+  if ("nullValue" in val) return null;
+  if ("arrayValue" in val) {
+    const arr = Array.isArray(val.arrayValue?.values) ? val.arrayValue.values : [];
+    return arr.map((item: any) => decodeFirestoreRestValue(item));
+  }
+  if ("mapValue" in val) {
+    const fields = val.mapValue?.fields || {};
+    const out: Record<string, any> = {};
+    for (const [k, v] of Object.entries(fields)) {
+      out[k] = decodeFirestoreRestValue(v);
+    }
+    return out;
+  }
+  return undefined;
+}
+
+/**
+ * Resilient HTTPS REST fallback reader for a Firestore collection.
+ * Used automatically whenever WebChannel/SDK real-time listeners encounter transient network issues.
+ */
+export async function fetchFirestoreCollectionRest<T = Record<string, any>>(
+  collectionName: string,
+  pageSize = 300
+): Promise<Array<T & { id: string }>> {
+  const url = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${encodeURIComponent(
+    FIRESTORE_DATABASE_ID
+  )}/documents/${encodeURIComponent(collectionName)}?pageSize=${pageSize}`;
+
+  const resp = await fetch(url, { method: "GET", headers: { Accept: "application/json" } });
+  if (!resp.ok) {
+    throw new Error(`Firestore REST ${collectionName} HTTP ${resp.status}`);
+  }
+  const payload = await resp.json();
+  const documents = Array.isArray(payload?.documents) ? payload.documents : [];
+
+  return documents.map((docItem: any) => {
+    const docId = String(docItem?.name || "").split("/").pop() || "";
+    const fields = docItem?.fields || {};
+    const parsed: Record<string, any> = {};
+    for (const [key, value] of Object.entries(fields)) {
+      parsed[key] = decodeFirestoreRestValue(value);
+    }
+    return {
+      ...parsed,
+      id: docId
+    } as T & { id: string };
+  });
+}
 
 // Real-time connection status state for UI feedback
 export interface FirestoreConnectionState {

@@ -9,7 +9,7 @@ import {
   orderBy,
   arrayUnion
 } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { db, fetchFirestoreCollectionRest } from '../lib/firebase';
 import { AppUserProfile } from './firebaseAuth';
 
 export type FeePaymentMethod =
@@ -509,32 +509,76 @@ export function subscribeToReceivedFees(
   callback: (records: ReceivedFeeRecord[]) => void,
   parentUidFilter?: string
 ): () => void {
+  let active = true;
+  let receivedLiveSnapshot = false;
+
+  const filterAndSort = (rawList: any[]): ReceivedFeeRecord[] => {
+    const filtered = rawList
+      .map((item) => ({ ...item, id: item.id || item.receiptNo }) as ReceivedFeeRecord)
+      .filter((item) => !parentUidFilter || item.parentUid === parentUidFilter);
+    filtered.sort(
+      (a: any, b: any) =>
+        new Date(b.paidAt || b.createdAt || 0).getTime() -
+        new Date(a.paidAt || a.createdAt || 0).getTime()
+    );
+    return filtered;
+  };
+
+  const hydrateFallback = async () => {
+    try {
+      const res = await fetch('/api/admin/received-fees');
+      if (res.ok) {
+        const body = await res.json();
+        const list = Array.isArray(body?.fees) ? body.fees : Array.isArray(body) ? body : [];
+        if (active && !receivedLiveSnapshot && list.length > 0) {
+          callback(filterAndSort(list));
+          return;
+        }
+      }
+    } catch {
+      // fall through to Firestore REST
+    }
+
+    try {
+      const restList = await fetchFirestoreCollectionRest<any>('received_fees');
+      if (active && (!receivedLiveSnapshot || restList.length > 0)) {
+        callback(filterAndSort(restList));
+      }
+    } catch {
+      // keep existing UI state intact
+    }
+  };
+
+  hydrateFallback();
+
   try {
     const colRef = collection(db, 'received_fees');
-    const q = query(colRef, orderBy('paidAt', 'desc'));
 
     const unsubscribe = onSnapshot(
-      q,
+      colRef,
       (snapshot) => {
+        if (!active) return;
+        receivedLiveSnapshot = true;
         const list: ReceivedFeeRecord[] = [];
         snapshot.forEach((d) => {
-          const item = { id: d.id, ...d.data() } as ReceivedFeeRecord;
-          if (!parentUidFilter || item.parentUid === parentUidFilter) {
-            list.push(item);
-          }
+          list.push({ id: d.id, ...d.data() } as ReceivedFeeRecord);
         });
-        callback(list);
+        callback(filterAndSort(list));
       },
       (err) => {
-        console.warn('[paymentService] subscribeToReceivedFees notice:', err);
-        callback([]);
+        console.warn('[paymentService] subscribeToReceivedFees notice (using REST fallback):', err);
+        hydrateFallback();
       }
     );
 
-    return unsubscribe;
+    return () => {
+      active = false;
+      unsubscribe();
+    };
   } catch (err) {
     console.warn('[paymentService] Error setting up listener:', err);
-    callback([]);
-    return () => {};
+    return () => {
+      active = false;
+    };
   }
 }

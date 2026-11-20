@@ -73,7 +73,6 @@ import {
   adminDeleteTutorFromDatabase,
   subscribeToRealtimeBookings,
   subscribeToTutorsRequests,
-  subscribeToCompleteTutors,
   subscribeToTutorsReviews,
   subscribeToOfflineDemoQueries,
   adminDeleteOfflineDemoQuery,
@@ -166,7 +165,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   // 11 Dedicated Collections State
   const [tutorRequests, setTutorRequests] = useState<any[]>([]);
-  const [completeTutors, setCompleteTutors] = useState<any[]>([]);
   const [withdrawalNotices, setWithdrawalNotices] = useState<TutorWithdrawalRequest[]>([]);
   const [completeWithdrawals, setCompleteWithdrawals] = useState<TutorWithdrawalRequest[]>([]);
   const [tutorsReviews, setTutorsReviews] = useState<any[]>([]);
@@ -218,7 +216,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     const reqPhoneDigits = String(req.tutorPhone || '').replace(/\D/g, '').slice(-10);
     const reqName = String(req.tutorName || '').trim().toLowerCase();
 
-    const matchedTutor = [...tutors, ...completeTutors].find((t: any) => {
+    const matchedTutor = tutors.find((t: any) => {
       const tIds = [t.id, t.uid].map((v: any) => String(v || '').trim()).filter(Boolean);
       if (reqId && tIds.includes(reqId)) return true;
       if (reqEmail && t.email && String(t.email).trim().toLowerCase() === reqEmail) return true;
@@ -301,6 +299,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [tutors, setTutors] = useState<Tutor[]>([]);
   const [isLoadingTutors, setIsLoadingTutors] = useState(true);
   const [tutorFilter, setTutorFilter] = useState<'pending' | 'approved' | 'rejected' | 'all'>('pending');
+  const hasUserSelectedTutorFilterRef = useRef<boolean>(false);
+  const [isSyncingData, setIsSyncingData] = useState(false);
   const [tutorSearch, setTutorSearch] = useState('');
   const [selectedTutorForReview, setSelectedTutorForReview] = useState<Tutor | null>(null);
   const [isVerifying, setIsVerifying] = useState(false);
@@ -470,6 +470,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           !t.id.toLowerCase().includes('t7rcs2ymnyymgjwneqhqeazwale2')
       );
       setTutors(cleanTutors);
+      if (!hasUserSelectedTutorFilterRef.current && cleanTutors.length > 0) {
+        const pendingCnt = cleanTutors.filter(
+          (t) => t.status !== 'rejected' && !(t.isApproved === true || t.verified === true || t.status === 'approved')
+        ).length;
+        if (pendingCnt === 0) {
+          setTutorFilter('all');
+        }
+      }
       setSelectedTutorForReview((prev) => {
         if (!prev) return prev;
         const latest = cleanTutors.find((item) => item.id === prev.id);
@@ -486,11 +494,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     // 3. Tutors Requests collection (registered tutors pending completion)
     const unsubTutorRequests = subscribeToTutorsRequests((reqs) => {
       setTutorRequests(reqs);
-    });
-
-    // 4. Complete Tutors collection (profile completed with timings, fees & assigned parents)
-    const unsubCompleteTutors = subscribeToCompleteTutors((cTutors) => {
-      setCompleteTutors(cTutors);
     });
 
     // 5. Withdrawal Notices collection (pending tutor requests)
@@ -552,7 +555,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       unsubTutors();
       unsubBookings();
       unsubTutorRequests();
-      unsubCompleteTutors();
       unsubWithdrawalNotices();
       unsubCompleteWithdrawals();
       unsubTutorsReviews();
@@ -565,6 +567,89 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       unsubReceivedFees();
     };
   }, []);
+
+  const handleRefreshAdminData = async () => {
+    if (isSyncingData) return;
+    setIsSyncingData(true);
+    try {
+      const [tRes, pRes, bRes, fRes] = await Promise.allSettled([
+        fetch('/api/admin/teachers').then((r) => (r.ok ? r.json() : null)),
+        fetch('/api/admin/parents').then((r) => (r.ok ? r.json() : null)),
+        fetch('/api/bookings').then((r) => (r.ok ? r.json() : null)),
+        fetch('/api/admin/received-fees').then((r) => (r.ok ? r.json() : null))
+      ]);
+
+      let syncedSummary: string[] = [];
+
+      if (tRes.status === 'fulfilled' && Array.isArray(tRes.value?.teachers)) {
+        const serverTeachers = tRes.value.teachers.filter(
+          (t: any) =>
+            t?.name &&
+            !String(t.name).toLowerCase().includes('divya') &&
+            !String(t.id || '').toLowerCase().includes('t7rcs2ymnyymgjwneqhqeazwale2')
+        );
+        if (serverTeachers.length > 0) {
+          setTutors((prev) => {
+            const byId = new Map<string, Tutor>();
+            for (const item of serverTeachers) {
+              const uid = String(item.id || item.uid || '').replace(/^fb_teacher_/, '');
+              if (uid) byId.set(uid, { ...item, id: uid });
+            }
+            for (const item of prev) {
+              const uid = String(item.id || '').replace(/^fb_teacher_/, '');
+              if (uid) byId.set(uid, { ...(byId.get(uid) || {}), ...item, id: uid });
+            }
+            return Array.from(byId.values());
+          });
+          syncedSummary.push(`${serverTeachers.length} tutors`);
+        }
+      }
+
+      if (pRes.status === 'fulfilled' && Array.isArray(pRes.value?.parents)) {
+        const genuineParents = pRes.value.parents.filter((p: any) => (p.role || 'parent') === 'parent' && !isFakeParent(p));
+        if (genuineParents.length > 0) {
+          setRegisteredParents((prev) => {
+            const byId = new Map<string, AppUserProfile>();
+            for (const p of genuineParents) {
+              const key = String(p.uid || p.id || p.email || '').toLowerCase();
+              if (key) byId.set(key, p);
+            }
+            for (const p of prev) {
+              const key = String(p.uid || p.email || '').toLowerCase();
+              if (key) byId.set(key, { ...(byId.get(key) || {}), ...p });
+            }
+            return Array.from(byId.values());
+          });
+          syncedSummary.push(`${genuineParents.length} parents`);
+        }
+      }
+
+      if (bRes.status === 'fulfilled' && Array.isArray(bRes.value?.bookings)) {
+        if (bRes.value.bookings.length > 0) {
+          setBookings(bRes.value.bookings);
+          syncedSummary.push(`${bRes.value.bookings.length} bookings`);
+        }
+      }
+
+      if (fRes.status === 'fulfilled' && Array.isArray(fRes.value?.fees)) {
+        if (fRes.value.fees.length > 0) {
+          setReceivedFeesList(fRes.value.fees);
+          syncedSummary.push(`${fRes.value.fees.length} fees`);
+        }
+      }
+
+      showToast(
+        'success',
+        syncedSummary.length > 0
+          ? `Database synced: ${syncedSummary.join(', ')}.`
+          : 'Database connection verified & up to date.'
+      );
+    } catch {
+      showToast('error', 'Could not reach database sync endpoint.');
+    } finally {
+      setIsSyncingData(false);
+    }
+  };
 
   useBackButtonDismiss(Boolean(confirmDialog) && !isConfirmBusy, 'admin-confirm-dialog', () =>
     setConfirmDialog(null)
@@ -1922,7 +2007,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     {pendingTutorsCount} New
                   </span>
                 ) : (
-                  <span className="text-[10px] text-slate-400 font-semibold">{tutorRequests.length}</span>
+                  <span className="text-[10px] text-slate-400 font-semibold">0</span>
                 )}
               </button>
 
@@ -2278,6 +2363,18 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
           {/* Quick Header Tools & Alerts */}
           <div className="flex items-center gap-2.5 shrink-0">
+            {/* Manual Live Database Sync Button */}
+            <button
+              type="button"
+              onClick={handleRefreshAdminData}
+              disabled={isSyncingData}
+              className="px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer border bg-slate-800 text-slate-200 border-slate-700/60 hover:bg-slate-700 hover:text-white disabled:opacity-60"
+              title="Refresh live data from Cloud Firestore"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-emerald-400 ${isSyncingData ? 'animate-spin' : ''}`} />
+              <span className="hidden sm:inline">{isSyncingData ? 'Syncing...' : 'Sync Data'}</span>
+            </button>
+
             {/* Real-time Notification Alert Bell Popover */}
             <div className="relative" ref={notificationRef}>
               <button
@@ -2523,7 +2620,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               <div className="flex items-center gap-1.5 bg-slate-900/90 p-1.5 rounded-2xl border border-slate-700 shrink-0 overflow-x-auto">
                 <button
                   type="button"
-                  onClick={() => setTutorFilter('all')}
+                  onClick={() => {
+                    hasUserSelectedTutorFilterRef.current = true;
+                    setTutorFilter('all');
+                  }}
                   className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${
                     tutorFilter === 'all' ? 'bg-slate-700 text-white font-black shadow-xs' : 'text-slate-400 hover:text-white'
                   }`}
@@ -2533,7 +2633,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
                 <button
                   type="button"
-                  onClick={() => setTutorFilter('pending')}
+                  onClick={() => {
+                    hasUserSelectedTutorFilterRef.current = true;
+                    setTutorFilter('pending');
+                  }}
                   className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${
                     tutorFilter === 'pending'
                       ? 'bg-amber-500 text-slate-950 font-black shadow-xs'
@@ -2551,7 +2654,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
                 <button
                   type="button"
-                  onClick={() => setTutorFilter('approved')}
+                  onClick={() => {
+                    hasUserSelectedTutorFilterRef.current = true;
+                    setTutorFilter('approved');
+                  }}
                   className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${
                     tutorFilter === 'approved'
                       ? 'bg-emerald-500 text-slate-950 font-black shadow-xs'
@@ -2567,7 +2673,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
                 <button
                   type="button"
-                  onClick={() => setTutorFilter('rejected')}
+                  onClick={() => {
+                    hasUserSelectedTutorFilterRef.current = true;
+                    setTutorFilter('rejected');
+                  }}
                   className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${
                     tutorFilter === 'rejected' ? 'bg-rose-500 text-white font-black shadow-xs' : 'text-slate-400 hover:text-white'
                   }`}
@@ -3192,6 +3301,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   <button
                     type="button"
                     onClick={() => {
+                      setTutorFilter('pending');
                       setActiveTab('tutors_requests');
                     }}
                     className="px-4 py-2.5 rounded-2xl bg-slate-700 hover:bg-slate-600 text-white font-bold text-xs sm:text-sm flex items-center gap-2 transition-all cursor-pointer"
@@ -5196,53 +5306,94 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                               )}
                             </div>
 
-                            {/* Booked Tutors Section */}
-                            {Array.isArray(parent.bookedTutors) && parent.bookedTutors.length > 0 && (
-                              <div className="mt-3 bg-slate-950/70 rounded-2xl p-3 border border-indigo-500/30 space-y-2">
-                                <div className="flex items-center justify-between text-xs font-bold text-indigo-300">
-                                  <span className="flex items-center gap-1.5">
-                                    <GraduationCap className="w-3.5 h-3.5 text-indigo-400" />
-                                    Booked Tutors ({parent.bookedTutors.length})
-                                  </span>
-                                  <span className="text-[11px] font-semibold text-emerald-400">
-                                    ₹{parent.feesAmount || parent.bookedTutors[0]?.fee || parent.bookedTutors[0]?.monthlyFee || 0}/mo
-                                  </span>
-                                </div>
-                                <div className="space-y-1.5 max-h-32 overflow-y-auto">
-                                  {parent.bookedTutors.map((bt: any, idx: number) => (
-                                    <div
-                                      key={bt.id || idx}
-                                      className="flex items-center justify-between text-[11px] bg-slate-900/80 px-2.5 py-1.5 rounded-xl border border-slate-800"
-                                    >
-                                      <div className="flex items-center gap-2 truncate">
-                                        <span className="font-bold text-white truncate">
-                                          {bt.tutorName || bt.name || 'Home Tutor'}
-                                        </span>
-                                        {bt.timing && (
-                                          <span className="text-indigo-300 text-[10px] shrink-0">
-                                            ⏰ {bt.timing}
-                                          </span>
-                                        )}
-                                      </div>
-                                      <div className="flex items-center gap-2 shrink-0">
-                                        <span className="font-bold text-emerald-400">
-                                          ₹{bt.fee || bt.monthlyFee || parent.feesAmount || 0}
-                                        </span>
-                                        <span
-                                          className={`px-1.5 py-0.2 rounded-md text-[9px] font-bold ${
-                                            bt.status === 'Active' || bt.status === 'accepted'
-                                              ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                                              : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                                          }`}
+                            {/* Booked Tutors Section (Deduplicated by bookingId) */}
+                            {(() => {
+                              const rawBooked = Array.isArray(parent.bookedTutors) ? parent.bookedTutors : [];
+                              const rawHired = Array.isArray(parent.hiredTutors) ? parent.hiredTutors : [];
+                              const dedupMap = new Map<string, any>();
+                              const rank = (s: any) => {
+                                const v = String(s || '').toLowerCase();
+                                if (v === 'active' || v === 'accepted' || v === 'assigned' || v === 'reassigned') return 3;
+                                if (v === 'pending') return 2;
+                                return 1;
+                              };
+                              for (const item of [...rawBooked, ...rawHired]) {
+                                if (!item) continue;
+                                const bId = String(item.bookingId || (String(item.id || '').startsWith('book-') ? item.id : '') || '').trim();
+                                const key = bId || String(item.id || '').trim() || `${item.tutorId || item.tutorName}_${item.timing || item.timeSlot || ''}`;
+                                if (!key) continue;
+                                const prev = dedupMap.get(key);
+                                if (!prev) {
+                                  dedupMap.set(key, item);
+                                } else {
+                                  const incomingWins = rank(item.status) >= rank(prev.status);
+                                  const primary = incomingWins ? item : prev;
+                                  const secondary = incomingWins ? prev : item;
+                                  dedupMap.set(key, {
+                                    ...secondary,
+                                    ...primary,
+                                    fee: Number(primary.fee || primary.monthlyFee) > 0 ? Number(primary.fee || primary.monthlyFee) : Number(secondary.fee || secondary.monthlyFee || 0),
+                                    monthlyFee: Number(primary.monthlyFee || primary.fee) > 0 ? Number(primary.monthlyFee || primary.fee) : Number(secondary.monthlyFee || secondary.fee || 0),
+                                    timing: primary.timing || primary.timeSlot || secondary.timing || secondary.timeSlot || ''
+                                  });
+                                }
+                              }
+                              const uniqueBookedTutors = Array.from(dedupMap.values());
+                              if (uniqueBookedTutors.length === 0) return null;
+                              const totalMonthlyFees = uniqueBookedTutors.reduce(
+                                (sum, bt) => sum + (Number(bt.fee || bt.monthlyFee) || 0),
+                                0
+                              );
+                              return (
+                                <div className="mt-3 bg-slate-950/70 rounded-2xl p-3 border border-indigo-500/30 space-y-2">
+                                  <div className="flex items-center justify-between text-xs font-bold text-indigo-300">
+                                    <span className="flex items-center gap-1.5">
+                                      <GraduationCap className="w-3.5 h-3.5 text-indigo-400" />
+                                      Booked Tutors ({uniqueBookedTutors.length})
+                                    </span>
+                                    <span className="text-[11px] font-semibold text-emerald-400">
+                                      ₹{(totalMonthlyFees || parent.feesAmount || 0).toLocaleString('en-IN')}/mo total
+                                    </span>
+                                  </div>
+                                  <div className="space-y-1.5 max-h-36 overflow-y-auto">
+                                    {uniqueBookedTutors.map((bt: any, idx: number) => {
+                                      const slotLabel = bt.timing || bt.timeSlot || '';
+                                      return (
+                                        <div
+                                          key={bt.bookingId || bt.id || idx}
+                                          className="flex items-center justify-between text-[11px] bg-slate-900/80 px-2.5 py-1.5 rounded-xl border border-slate-800"
                                         >
-                                          {bt.status || 'Active'}
-                                        </span>
-                                      </div>
-                                    </div>
-                                  ))}
+                                          <div className="flex items-center gap-2 truncate">
+                                            <span className="font-bold text-white truncate">
+                                              {bt.tutorName || bt.name || 'Home Tutor'}
+                                            </span>
+                                            {slotLabel && (
+                                              <span className="text-indigo-300 text-[10px] shrink-0">
+                                                ⏰ {slotLabel}
+                                              </span>
+                                            )}
+                                          </div>
+                                          <div className="flex items-center gap-2 shrink-0">
+                                            <span className="font-bold text-emerald-400">
+                                              ₹{(Number(bt.fee || bt.monthlyFee) || parent.feesAmount || 0).toLocaleString('en-IN')}
+                                            </span>
+                                            <span
+                                              className={`px-1.5 py-0.2 rounded-md text-[9px] font-bold ${
+                                                bt.status === 'Active' || bt.status === 'accepted'
+                                                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                                  : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                                              }`}
+                                            >
+                                              {bt.status || 'Active'}
+                                            </span>
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
                                 </div>
-                              </div>
-                            )}
+                              );
+                            })()}
 
                             {/* Contact Details */}
                             <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-slate-300">

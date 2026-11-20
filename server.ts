@@ -80,15 +80,263 @@ function saveHeroBanners(banners: ServerHeroBanner[]) {
 
 let heroBannersDatabase: ServerHeroBanner[] = loadSavedHeroBanners();
 
+// Live Cloud Firestore REST Reader (Keeps Express API 100% synchronized with Cloud Firestore)
+const FIRESTORE_PROJECT_ID = "kumariinstitute-80399";
+const FIRESTORE_DB_ID = "(default)";
+const firestoreRestCache = new Map<string, { ts: number; data: any[] }>();
+const FIRESTORE_CACHE_TTL_MS = 4000;
+
+function decodeFirestoreValueServer(val: any): any {
+  if (!val || typeof val !== "object") return undefined;
+  if ("stringValue" in val) return val.stringValue;
+  if ("booleanValue" in val) return Boolean(val.booleanValue);
+  if ("integerValue" in val) return Number(val.integerValue);
+  if ("doubleValue" in val) return Number(val.doubleValue);
+  if ("timestampValue" in val) return val.timestampValue;
+  if ("nullValue" in val) return null;
+  if ("arrayValue" in val) {
+    const arr = Array.isArray(val.arrayValue?.values) ? val.arrayValue.values : [];
+    return arr.map((item: any) => decodeFirestoreValueServer(item));
+  }
+  if ("mapValue" in val) {
+    const fields = val.mapValue?.fields || {};
+    const out: Record<string, any> = {};
+    for (const [k, v] of Object.entries(fields)) {
+      out[k] = decodeFirestoreValueServer(v);
+    }
+    return out;
+  }
+  return undefined;
+}
+
+async function fetchLiveFirestoreCollectionServer(collectionName: string, forceFresh = false): Promise<any[]> {
+  const cached = firestoreRestCache.get(collectionName);
+  if (!forceFresh && cached && Date.now() - cached.ts < FIRESTORE_CACHE_TTL_MS) {
+    return cached.data;
+  }
+  try {
+    const url = `https://firestore.googleapis.com/v1/projects/${FIRESTORE_PROJECT_ID}/databases/${encodeURIComponent(
+      FIRESTORE_DB_ID
+    )}/documents/${encodeURIComponent(collectionName)}?pageSize=300`;
+    const resp = await fetch(url, { headers: { Accept: "application/json" } });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const payload: any = await resp.json();
+    const docs = Array.isArray(payload?.documents) ? payload.documents : [];
+    const parsed = docs.map((d: any) => {
+      const docId = String(d?.name || "").split("/").pop() || "";
+      const fields = d?.fields || {};
+      const out: Record<string, any> = {};
+      for (const [k, v] of Object.entries(fields)) {
+        out[k] = decodeFirestoreValueServer(v);
+      }
+      return {
+        ...out,
+        _docId: docId,
+        id: docId
+      };
+    });
+    firestoreRestCache.set(collectionName, { ts: Date.now(), data: parsed });
+    return parsed;
+  } catch (err) {
+    console.warn(`[Server Firestore Sync] ${collectionName} read notice:`, (err as any)?.message || err);
+    return cached?.data || [];
+  }
+}
+
+function normalizeServerTutorRecord(rawDoc: any): Tutor | null {
+  if (!rawDoc) return null;
+  const docId = String(rawDoc._docId || rawDoc.uid || rawDoc.id || "").trim();
+  const canonicalId = docId.replace(/^fb_teacher_/, "").trim();
+  const rawName = String(rawDoc.fullName || rawDoc.name || "").trim();
+  if (!canonicalId || !rawName) return null;
+
+  const isApproved = Boolean(
+    (rawDoc.verified === true && (rawDoc.isApproved === true || rawDoc.status === "approved")) ||
+      rawDoc.kycStatus === "approved" ||
+      rawDoc.kycStatus === "verified" ||
+      rawDoc.status === "approved" ||
+      rawDoc.isApproved === true ||
+      rawDoc.verificationStatus === "Verified Genuine Tutor"
+  );
+  const isRejected = rawDoc.status === "rejected";
+  const status: "approved" | "pending" | "rejected" = isRejected
+    ? "rejected"
+    : isApproved
+    ? "approved"
+    : "pending";
+
+  const hourly =
+    Number(rawDoc.hourlyRate) ||
+    Number(rawDoc.hourlyCharges) ||
+    Number(rawDoc.hourlyFee) ||
+    (Number(rawDoc.monthlyFee) ? Math.round(Number(rawDoc.monthlyFee) / 30) : 0);
+  const monthly = Number(rawDoc.monthlyFee) || Number(rawDoc.feeAmount) || (hourly > 0 ? hourly * 30 : 0);
+  const expYears = Number(rawDoc.experienceYears) || 0;
+
+  const normalized: any = {
+    ...rawDoc,
+    id: canonicalId,
+    uid: rawDoc.uid || canonicalId,
+    name: rawName,
+    fullName: rawName,
+    email: rawDoc.email || "",
+    phone: rawDoc.phone || "",
+    qualification: rawDoc.highestQualification || rawDoc.qualification || "",
+    experienceYears: expYears,
+    experienceText: expYears > 0 ? `${expYears}+ Yrs Exp` : "",
+    subjects: Array.isArray(rawDoc.subjects) ? rawDoc.subjects : [],
+    classesHandled: Array.isArray(rawDoc.classesHandled)
+      ? rawDoc.classesHandled
+      : Array.isArray(rawDoc.classes)
+      ? rawDoc.classes
+      : [],
+    boardsSupported: Array.isArray(rawDoc.boardsSupported) ? rawDoc.boardsSupported : [],
+    monthlyFee: monthly,
+    hourlyRate: hourly,
+    hourlyCharges: hourly,
+    bio: rawDoc.bio || "",
+    avatar: rawDoc.avatar || rawDoc.photoUrl || "",
+    locationArea: rawDoc.locationArea || rawDoc.locality || rawDoc.addressDetails?.street || "Rayagada",
+    addressSnippet: rawDoc.address || rawDoc.addressSnippet || rawDoc.locality || "",
+    latitude: typeof rawDoc.latitude === "number" && !isNaN(rawDoc.latitude) ? rawDoc.latitude : 19.1691,
+    longitude: typeof rawDoc.longitude === "number" && !isNaN(rawDoc.longitude) ? rawDoc.longitude : 83.415,
+    gender: rawDoc.gender === "male" ? "male" : "female",
+    teacherType: rawDoc.teacherType === "both" ? "both" : "home",
+    verified: isApproved && rawDoc.verified !== false,
+    isApproved: isApproved && !isRejected,
+    status,
+    profileCompleted: Boolean(
+      rawDoc.profileCompleted === true ||
+        rawDoc.educationDetails?.tenth?.marksheetUrl ||
+        rawDoc.educationDetails?.twelfth?.marksheetUrl ||
+        rawDoc.aadhaarDocUrl ||
+        rawDoc.feeStructure
+    ),
+    availableTimeSlots: Array.isArray(rawDoc.availableTimeSlots)
+      ? rawDoc.availableTimeSlots
+      : Array.isArray(rawDoc.availableTimings)
+      ? rawDoc.availableTimings
+      : Array.isArray(rawDoc.timeSlots)
+      ? rawDoc.timeSlots
+      : [],
+    reviews: Array.isArray(rawDoc.reviews) ? rawDoc.reviews : [],
+    teachingHighlights: Array.isArray(rawDoc.teachingHighlights) ? rawDoc.teachingHighlights : [],
+    distanceKm: 0,
+    availabilityText: rawDoc.availabilityText || "Available for Home Tuition",
+    availabilityType: "available_now",
+    availabilityBadge: isApproved ? "Verified Genuine Home Tutor" : "Pending Verification"
+  };
+
+  if (isFakeTeacherRecord(normalized)) return null;
+  return normalized as Tutor;
+}
+
+async function getMergedLiveTeachersServer(): Promise<Tutor[]> {
+  // Single authoritative tutor collection: 'teachers' (complete_tutors retired).
+  const fsTeachers = await fetchLiveFirestoreCollectionServer("teachers");
+  const teachersById = new Map<string, any>();
+
+  for (const d of fsTeachers) {
+    const rawDocId = String(d?._docId || d?.id || "").trim();
+    if (rawDocId.toLowerCase().startsWith("fb_teacher_") && !d?.name && !d?.fullName) {
+      continue; // Ignore nameless legacy ghost stubs
+    }
+    const canonicalId = String(d?.uid || rawDocId).replace(/^fb_teacher_/, "").trim();
+    if (!canonicalId) continue;
+    // Prefer canonical UID doc over any prefixed duplicate
+    if (!teachersById.has(canonicalId) || rawDocId === canonicalId) {
+      teachersById.set(canonicalId, { ...d, _docId: canonicalId, id: canonicalId, uid: canonicalId });
+    }
+  }
+
+  const merged: Tutor[] = [];
+  teachersById.forEach((teacherDoc) => {
+    const parsed = normalizeServerTutorRecord(teacherDoc);
+    if (parsed) merged.push(parsed);
+  });
+
+  if (merged.length > 0) {
+    return merged.sort(
+      (a: any, b: any) =>
+        new Date(b.updatedAt || b.submittedAt || b.createdAt || 0).getTime() -
+        new Date(a.updatedAt || a.submittedAt || a.createdAt || 0).getTime()
+    );
+  }
+
+  return loadSavedTeachers().filter((t) => !isFakeTeacherRecord(t));
+}
+
+function deduplicateServerBookedTutors(bookedArr: any[], hiredArr: any[]): any[] {
+  const byKey = new Map<string, any>();
+  const statusRank = (s: any) => {
+    const v = String(s || "").toLowerCase();
+    if (v === "active" || v === "accepted" || v === "assigned" || v === "reassigned") return 3;
+    if (v === "pending") return 2;
+    return 1;
+  };
+
+  const ingest = (list: any[]) => {
+    if (!Array.isArray(list)) return;
+    for (const raw of list) {
+      if (!raw || typeof raw !== "object") continue;
+      const bookingId = String(raw.bookingId || (String(raw.id || "").startsWith("book-") ? raw.id : "") || "").trim();
+      const key =
+        bookingId ||
+        String(raw.id || "").trim() ||
+        `${String(raw.tutorId || raw.tutorName || "").toLowerCase()}_${String(raw.timeSlot || raw.timing || "").toLowerCase()}`;
+      if (!key) continue;
+
+      const normalized = {
+        ...raw,
+        bookingId: bookingId || raw.bookingId || raw.id,
+        timing: raw.timing || raw.timeSlot || "",
+        timeSlot: raw.timeSlot || raw.timing || "",
+        fee: Number(raw.fee) || Number(raw.monthlyFee) || 0,
+        monthlyFee: Number(raw.monthlyFee) || Number(raw.fee) || 0
+      };
+
+      const existing = byKey.get(key);
+      if (!existing) {
+        byKey.set(key, normalized);
+      } else {
+        const incomingWins = statusRank(normalized.status) >= statusRank(existing.status);
+        const primary = incomingWins ? normalized : existing;
+        const secondary = incomingWins ? existing : normalized;
+        byKey.set(key, {
+          ...secondary,
+          ...primary,
+          fee: primary.fee > 0 ? primary.fee : secondary.fee,
+          monthlyFee: primary.monthlyFee > 0 ? primary.monthlyFee : secondary.monthlyFee,
+          timing: primary.timing || secondary.timing || "",
+          timeSlot: primary.timeSlot || secondary.timeSlot || "",
+          tutorName: primary.tutorName || primary.name || secondary.tutorName || secondary.name || "Home Tutor"
+        });
+      }
+    }
+  };
+
+  ingest(bookedArr);
+  ingest(hiredArr);
+
+  return Array.from(byKey.values()).sort(
+    (a, b) =>
+      new Date(b.assignedAt || b.date || b.createdAt || 0).getTime() -
+      new Date(a.assignedAt || a.date || a.createdAt || 0).getTime()
+  );
+}
+
 // Helper to exclude fake/sample parents
 function isFakeParentRecord(u: any): boolean {
   if (!u) return true;
   const uid = String(u.uid || u.id || '').toLowerCase().trim();
   const name = String(u.fullName || u.name || u.parentName || '').toLowerCase().trim();
   const child = String(u.childName || u.studentName || '').toLowerCase().trim();
-  const grade = String(u.childGrade || u.studentGrade || u.grade || u.class || '').toLowerCase().trim();
-  const school = String(u.childSchool || u.school || '').toLowerCase().trim();
   const email = String(u.email || '').toLowerCase().trim();
+
+  // Exclude institute admin account from parents directory
+  if (email === 'kkumariinstitute@gmail.com') {
+    return true;
+  }
 
   // Must have a real name
   if (
@@ -108,15 +356,19 @@ function isFakeParentRecord(u: any): boolean {
     return true;
   }
 
-  // Exclude incomplete registration (must have student details or completed profile)
+  const grade = String(u.childGrade || u.studentGrade || u.grade || u.class || '').toLowerCase().trim();
+  const school = String(u.childSchool || u.school || '').toLowerCase().trim();
+  const hasRealBookings =
+    (Array.isArray(u.bookedTutors) && u.bookedTutors.length > 0) ||
+    (Array.isArray(u.hiredTutors) && u.hiredTutors.length > 0);
   const hasStudentDetails =
     child.length > 0 ||
     grade.length > 0 ||
     school.length > 0 ||
     (Array.isArray(u.subjectsNeeded) && u.subjectsNeeded.length > 0) ||
     u.learningRequirementsSubmitted === true;
+  const hasCompletedRegistration = u.profileCompleted === true || hasStudentDetails || hasRealBookings;
 
-  const hasCompletedRegistration = u.profileCompleted === true || hasStudentDetails;
   if (!hasCompletedRegistration) {
     return true;
   }
@@ -127,13 +379,13 @@ function isFakeParentRecord(u: any): boolean {
     uid.includes('parent-deepak-mohanty') ||
     uid.includes('aa3qpbnfr4eimeftvmrj0vatvdq2') ||
     uid.includes('kqc3hy8leicwk9blsnek3t8mxdx2') ||
-    name.includes('ramesh patnaik') ||
-    name.includes('sasmita sahu') ||
-    name.includes('deepak mohanty') ||
-    name.includes('anjan naik') ||
-    child.includes('ananya patnaik') ||
-    child.includes('aryan sahu') ||
-    child.includes('subhashree mohanty')
+    name === 'ramesh patnaik' ||
+    name === 'sasmita sahu' ||
+    name === 'deepak mohanty' ||
+    name === 'anjan naik' ||
+    child === 'ananya patnaik' ||
+    child === 'aryan sahu' ||
+    child === 'subhashree mohanty'
   );
 }
 
@@ -566,9 +818,9 @@ app.get("/api/health", (_req, res) => {
 
 // 2. Get All Approved Teachers for Public "Find Home Tutor" Search
 // STRICT RULE: Only genuine tutors accepted by admin (isApproved === true) are visible to parents!
-app.get("/api/teachers", (req, res) => {
+app.get("/api/teachers", async (req, res) => {
   const { subject, classLevel } = req.query;
-  const currentTeachers = loadSavedTeachers();
+  const currentTeachers = await getMergedLiveTeachersServer();
   // Strictly filter to genuine approved tutors only
   let filtered = currentTeachers.filter((t) => {
     if (isFakeTeacherRecord(t)) return false;
@@ -595,14 +847,13 @@ app.get("/api/teachers", (req, res) => {
 });
 
 // 2b. Admin Endpoint: Get All Teachers (Pending, Approved & Rejected with full certificates)
-app.get("/api/admin/teachers", (_req, res) => {
-  const currentTeachers = loadSavedTeachers();
-  const realTeachers = currentTeachers.filter((t) => !isFakeTeacherRecord(t));
+app.get("/api/admin/teachers", async (_req, res) => {
+  const realTeachers = await getMergedLiveTeachersServer();
   res.json({
     success: true,
     total: realTeachers.length,
-    pendingCount: realTeachers.filter((t) => t.status === "pending" || !t.isApproved).length,
-    approvedCount: realTeachers.filter((t) => (t.status === "approved" || t.isApproved) && t.verified).length,
+    pendingCount: realTeachers.filter((t) => t.status !== "rejected" && !(t.status === "approved" || t.isApproved)).length,
+    approvedCount: realTeachers.filter((t) => t.status !== "rejected" && (t.status === "approved" || t.isApproved)).length,
     teachers: realTeachers,
   });
 });
@@ -832,7 +1083,7 @@ app.delete("/api/admin/teachers/:id/reviews/:reviewId", (req, res) => {
 // 3. Parent Proximity Search: Live-Location Nearby Teachers
 // Accepts parent GPS coordinates (lat, lng), radius in km (default 20 km), and filters.
 // STRICT RULE: Only genuine tutors accepted by admin (isApproved === true) are matched and shown!
-app.get("/api/teachers/nearby", (req, res) => {
+app.get("/api/teachers/nearby", async (req, res) => {
   const latStr = req.query.lat as string;
   const lngStr = req.query.lng as string;
   const radiusStr = (req.query.radius as string) || "20";
@@ -859,8 +1110,8 @@ app.get("/api/teachers/nearby", (req, res) => {
     return;
   }
 
-  // Strictly filter to genuine approved teachers ONLY
-  const currentTeachers = loadSavedTeachers();
+  // Strictly filter to genuine approved teachers ONLY (synced live from Firestore + local backup)
+  const currentTeachers = await getMergedLiveTeachersServer();
   const approvedTeachers = currentTeachers.filter((t) => {
     if (isFakeTeacherRecord(t)) return false;
     return (t.isApproved === true || t.status === "approved") && t.verified === true && t.status !== "rejected";
@@ -1070,13 +1321,43 @@ app.post("/api/teachers/register-location", (req, res) => {
 // 4B. PARENT HOME TUTOR BOOKINGS & ADMIN ASSIGNMENT API
 // ---------------------------------------------------------------------------
 
-// Get all bookings (for Admin Panel & notifications)
-app.get("/api/bookings", (_req, res) => {
+// Get all bookings (for Admin Panel & notifications) - synced live with Firestore 'tutor_bookings'
+app.get("/api/bookings", async (_req, res) => {
+  const liveFirestoreBookings = await fetchLiveFirestoreCollectionServer("tutor_bookings");
+  const mergedMap = new Map<string, any>();
+
+  bookingsDatabase.forEach((b: any) => {
+    if (b?.id) mergedMap.set(String(b.id), b);
+  });
+  liveFirestoreBookings.forEach((b: any) => {
+    const id = String(b?.id || b?._docId || "");
+    if (id) mergedMap.set(id, { ...mergedMap.get(id), ...b, id });
+  });
+
+  const allBookings = Array.from(mergedMap.values()).sort(
+    (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+  );
+
   res.json({
     success: true,
-    total: bookingsDatabase.length,
-    pendingCount: bookingsDatabase.filter((b) => b.status === "pending").length,
-    bookings: bookingsDatabase,
+    total: allBookings.length,
+    pendingCount: allBookings.filter((b) => b.status === "pending").length,
+    bookings: allBookings,
+  });
+});
+
+// Get all received fee records (for Admin Panel fallback) - synced live with Firestore 'received_fees'
+app.get("/api/admin/received-fees", async (_req, res) => {
+  const liveFees = await fetchLiveFirestoreCollectionServer("received_fees");
+  liveFees.sort(
+    (a, b) =>
+      new Date(b.paidAt || b.createdAt || 0).getTime() -
+      new Date(a.paidAt || a.createdAt || 0).getTime()
+  );
+  res.json({
+    success: true,
+    count: liveFees.length,
+    fees: liveFees,
   });
 });
 
@@ -2100,26 +2381,93 @@ app.get("/api/users/:identifier", (req, res) => {
   res.json({ success: true, user });
 });
 
-app.get("/api/admin/parents", (_req, res) => {
+app.get("/api/admin/parents", async (_req, res) => {
+  const [liveFirestoreParents, liveFirestoreTeachers, liveBookings, liveFees] = await Promise.all([
+    fetchLiveFirestoreCollectionServer("parents"),
+    fetchLiveFirestoreCollectionServer("teachers"),
+    fetchLiveFirestoreCollectionServer("tutor_bookings"),
+    fetchLiveFirestoreCollectionServer("received_fees")
+  ]);
+
+  // Build set of known Tutor UIDs (active teachers + tutors referenced in bookings/fees)
+  const knownTutorUids = new Set<string>();
+  liveFirestoreTeachers.forEach((t: any) => {
+    const cid = String(t.uid || t._docId || t.id || "").replace(/^fb_teacher_/, "").trim();
+    if (cid) knownTutorUids.add(cid);
+  });
+  liveBookings.forEach((b: any) => {
+    if (b?.assignedTutorId) knownTutorUids.add(String(b.assignedTutorId).replace(/^fb_teacher_/, "").trim());
+    if (b?.requestedTutorId) knownTutorUids.add(String(b.requestedTutorId).replace(/^fb_teacher_/, "").trim());
+  });
+  liveFees.forEach((f: any) => {
+    if (f?.tutorId) knownTutorUids.add(String(f.tutorId).replace(/^fb_teacher_/, "").trim());
+  });
+
+  // Track which parent UIDs have real parent bookings
+  const parentUidsWithBookings = new Set<string>();
+  liveBookings.forEach((b: any) => {
+    if (b?.parentUid) parentUidsWithBookings.add(String(b.parentUid).trim());
+  });
+
   const parentsMap = loadSavedParents();
-  const parentsList: any[] = [];
-  const seenUids = new Set<string>();
+  const mergedByUid = new Map<string, any>();
 
   Object.values(parentsMap).forEach((p: any) => {
-    if (p && p.role === "parent" && p.uid && !seenUids.has(p.uid) && !isFakeParentRecord(p)) {
-      seenUids.add(p.uid);
-      parentsList.push(p);
+    if (p && p.role === "parent" && p.uid && !isFakeParentRecord(p)) {
+      mergedByUid.set(p.uid, p);
     }
   });
 
   // Also include any verified parent in usersDatabase with role === "parent"
   Object.values(usersDatabase).forEach((u: any) => {
-    if (u && u.role === "parent" && u.uid && !seenUids.has(u.uid) && !isFakeParentRecord(u)) {
-      seenUids.add(u.uid);
-      parentsList.push(u);
+    if (u && u.role === "parent" && u.uid && !mergedByUid.has(u.uid) && !isFakeParentRecord(u)) {
+      mergedByUid.set(u.uid, u);
       parentsDatabase[u.uid] = u;
     }
   });
+
+  // Live Firestore parents always take precedence
+  liveFirestoreParents.forEach((fp: any) => {
+    const uid = String(fp.uid || fp._docId || fp.id || "").trim();
+    const normalizedRole = String(fp.role || "parent").toLowerCase();
+    const dedupBooked = deduplicateServerBookedTutors(fp.bookedTutors, fp.hiredTutors);
+    const record = {
+      ...fp,
+      uid,
+      id: uid,
+      role: normalizedRole,
+      bookedTutors: dedupBooked,
+      hiredTutors: dedupBooked.filter((b: any) => String(b.status || "").toLowerCase() !== "pending")
+    };
+    if (uid && normalizedRole !== "admin" && normalizedRole !== "teacher" && !isFakeParentRecord(record)) {
+      const existing = mergedByUid.get(uid);
+      mergedByUid.set(uid, existing ? { ...existing, ...record } : record);
+    }
+  });
+
+  const parentsList = Array.from(mergedByUid.values())
+    .map((p: any) => {
+      const dedupBooked = deduplicateServerBookedTutors(p.bookedTutors, p.hiredTutors);
+      return {
+        ...p,
+        bookedTutors: dedupBooked,
+        hiredTutors: dedupBooked.filter((b: any) => String(b.status || "").toLowerCase() !== "pending")
+      };
+    })
+    .filter((p: any) => {
+      const uid = String(p.uid || p.id || "").trim();
+      const hasParentBookings =
+        parentUidsWithBookings.has(uid) ||
+        (Array.isArray(p.bookedTutors) && p.bookedTutors.length > 0);
+      // Exclude accounts that are tutors (present in teachers or booked as tutors) unless they actually booked a tutor as a parent
+      if (knownTutorUids.has(uid) && !hasParentBookings) {
+        return false;
+      }
+      return !isFakeParentRecord(p);
+    })
+    .sort(
+      (a, b) => new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime()
+    );
 
   res.json({ success: true, count: parentsList.length, parents: parentsList });
 });

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Bell,
   CheckCircle2,
@@ -42,6 +42,7 @@ export const IncomingBookings: React.FC<IncomingBookingsProps> = ({
   const [bookings, setBookings] = useState<HomeTutorBooking[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [bookingFilter, setBookingFilter] = useState<'pending' | 'accepted' | 'declined' | 'all'>('pending');
+  const hasUserSelectedFilterRef = useRef<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
 
@@ -80,6 +81,12 @@ export const IncomingBookings: React.FC<IncomingBookingsProps> = ({
     const unsubscribe = subscribeToRealtimeBookings((liveBookings) => {
       setBookings(liveBookings);
       setIsLoading(false);
+      if (!hasUserSelectedFilterRef.current && liveBookings.length > 0) {
+        const pendingCount = liveBookings.filter((b) => b.status === 'pending').length;
+        if (pendingCount === 0) {
+          setBookingFilter('all');
+        }
+      }
     });
 
     return () => unsubscribe();
@@ -314,21 +321,84 @@ export const IncomingBookings: React.FC<IncomingBookingsProps> = ({
           </p>
         </div>
 
-        {/* Filter Section: Pending Incoming Requests */}
-        <div className="flex items-center gap-1.5 bg-slate-900/90 p-1.5 rounded-2xl border border-slate-700 shrink-0">
+        {/* Filter Section: All / Pending / Accepted / Declined */}
+        <div className="flex flex-wrap items-center gap-1.5 bg-slate-900/90 p-1.5 rounded-2xl border border-slate-700 shrink-0">
           <button
             type="button"
-            onClick={() => setBookingFilter('pending')}
-            className="px-3.5 py-1.5 rounded-xl text-xs font-black bg-amber-500 text-slate-950 flex items-center gap-1.5 shadow-xs cursor-default"
+            onClick={() => {
+              hasUserSelectedFilterRef.current = true;
+              setBookingFilter('all');
+            }}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+              bookingFilter === 'all'
+                ? 'bg-slate-700 text-white font-black shadow-xs'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            <span>All</span>
+            <span className="px-1.5 py-0.2 rounded-full bg-slate-950 text-slate-200 text-[10px] font-bold">
+              {bookings.length}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              hasUserSelectedFilterRef.current = true;
+              setBookingFilter('pending');
+            }}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+              bookingFilter === 'pending'
+                ? 'bg-amber-500 text-slate-950 font-black shadow-xs'
+                : 'text-slate-400 hover:text-white'
+            }`}
           >
             <Bell className="w-3.5 h-3.5" />
-            <span>Pending Requests</span>
-            {pendingBookings.length > 0 && (
-              <span className="px-1.5 py-0.2 rounded-full bg-slate-950 text-amber-300 text-[10px] font-bold">
-                {pendingBookings.length}
-              </span>
-            )}
+            <span>Pending</span>
+            <span className="px-1.5 py-0.2 rounded-full bg-slate-950 text-amber-300 text-[10px] font-bold">
+              {pendingBookings.length}
+            </span>
           </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              hasUserSelectedFilterRef.current = true;
+              setBookingFilter('accepted');
+            }}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+              bookingFilter === 'accepted'
+                ? 'bg-emerald-500 text-slate-950 font-black shadow-xs'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            <CheckCircle2 className="w-3.5 h-3.5" />
+            <span>Accepted</span>
+            <span className="px-1.5 py-0.2 rounded-full bg-slate-950 text-emerald-300 text-[10px] font-bold">
+              {acceptedBookings.length}
+            </span>
+          </button>
+
+          {declinedBookings.length > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                hasUserSelectedFilterRef.current = true;
+                setBookingFilter('declined');
+              }}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                bookingFilter === 'declined'
+                  ? 'bg-rose-500 text-white font-black shadow-xs'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Ban className="w-3.5 h-3.5" />
+              <span>Declined</span>
+              <span className="px-1.5 py-0.2 rounded-full bg-slate-950 text-rose-300 text-[10px] font-bold">
+                {declinedBookings.length}
+              </span>
+            </button>
+          )}
         </div>
       </div>
 

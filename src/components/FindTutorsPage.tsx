@@ -526,14 +526,23 @@ export const FindTutorsPage: React.FC<FindTutorsPageProps> = ({
 
   // Verified genuine Firestore tutors enriched with real distance (kept in object for TutorProfilePage)
   const enrichedTutors = useMemo(() => {
-    const sourceTutors =
-      firestoreLiveTeachers && firestoreLiveTeachers.length > 0
-        ? firestoreLiveTeachers
-        : backendNearbyTeachers && backendNearbyTeachers.length > 0
-        ? backendNearbyTeachers
-        : [];
+    const mergedById = new Map<string, Tutor>();
+    const normalizeId = (rawId: string) => String(rawId || '').trim().replace(/^fb_teacher_/, '');
 
-    const approvedTutors = sourceTutors.filter((t) => {
+    // Add live backend-synced Firestore teachers first, then overlay direct real-time Firestore snapshot
+    for (const t of backendNearbyTeachers || []) {
+      const uid = normalizeId(t.id);
+      if (uid) mergedById.set(uid, { ...t, id: uid });
+    }
+    for (const t of firestoreLiveTeachers || []) {
+      const uid = normalizeId(t.id);
+      if (uid) {
+        const existing = mergedById.get(uid);
+        mergedById.set(uid, existing ? { ...existing, ...t, id: uid } : { ...t, id: uid });
+      }
+    }
+
+    const approvedTutors = Array.from(mergedById.values()).filter((t) => {
       const id = (t.id || '').toLowerCase();
       const name = (t.name || '').toLowerCase().trim();
       if (!name || name === 'educator' || name.includes('educator') || id.includes('educator')) {
@@ -546,7 +555,8 @@ export const FindTutorsPage: React.FC<FindTutorsPageProps> = ({
         id.includes('sagar-das') ||
         id.includes('anita-mohanty') ||
         id.includes('sukumar') ||
-        id.startsWith('fb_teacher')
+        id.includes('t7rcs2ymnyymgjwneqhqeazwale2') ||
+        name.includes('divya')
       ) {
         return false;
       }
@@ -557,8 +567,8 @@ export const FindTutorsPage: React.FC<FindTutorsPageProps> = ({
     });
 
     return approvedTutors.map((tutor) => {
-      const tutorLat = typeof tutor.latitude === 'number' && !isNaN(tutor.latitude) ? tutor.latitude : 19.1691;
-      const tutorLng = typeof tutor.longitude === 'number' && !isNaN(tutor.longitude) ? tutor.longitude : 83.415;
+      const tutorLat = typeof tutor.latitude === 'number' && !isNaN(tutor.latitude) && tutor.latitude !== 0 ? tutor.latitude : 19.1691;
+      const tutorLng = typeof tutor.longitude === 'number' && !isNaN(tutor.longitude) && tutor.longitude !== 0 ? tutor.longitude : 83.415;
       const liveDist = calculateDistanceKm(currentLocation.lat, currentLocation.lng, tutorLat, tutorLng);
       const travelTime = Math.max(2, Math.round((liveDist / 20) * 60));
       return {

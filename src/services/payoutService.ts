@@ -8,7 +8,7 @@ import {
   onSnapshot,
   query
 } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { db, fetchFirestoreCollectionRest } from '../lib/firebase';
 import type { ReceivedFeeRecord } from './feePaymentService';
 
 export interface TutorWithdrawalRequest {
@@ -569,20 +569,34 @@ export function subscribeToTutorWithdrawals(
 export function subscribeToAllWithdrawalRequests(
   callback: (requests: TutorWithdrawalRequest[]) => void
 ): () => void {
+  let active = true;
   const emitLocal = () => {
+    if (!active) return;
     const list = deduplicateWithdrawals(getLocalWithdrawals());
     callback(list);
   };
   emitLocal();
+
+  const fallbackRest = () => {
+    fetchFirestoreCollectionRest<TutorWithdrawalRequest>('withdrawal_requests')
+      .then((restList) => {
+        if (!active) return;
+        const merged = deduplicateWithdrawals([...restList, ...getLocalWithdrawals()]);
+        saveLocalWithdrawals(merged);
+        callback(merged);
+      })
+      .catch(() => emitLocal());
+  };
 
   try {
     const colRef = collection(db, 'withdrawal_requests');
     const unsubscribe = onSnapshot(
       colRef,
       (snapshot) => {
+        if (!active) return;
         const remoteList: TutorWithdrawalRequest[] = [];
         snapshot.forEach((d) => {
-          remoteList.push(d.data() as TutorWithdrawalRequest);
+          remoteList.push({ id: d.id, ...(d.data() as TutorWithdrawalRequest) });
         });
 
         const merged = deduplicateWithdrawals([...remoteList, ...getLocalWithdrawals()]);
@@ -590,15 +604,19 @@ export function subscribeToAllWithdrawalRequests(
         callback(merged);
       },
       (err) => {
-        console.warn('[payoutService] Admin listener notice:', err);
-        emitLocal();
+        console.warn('[payoutService] Admin listener notice (using REST fallback):', err);
+        fallbackRest();
       }
     );
 
-    return () => unsubscribe();
+    return () => {
+      active = false;
+      unsubscribe();
+    };
   } catch (err) {
     console.warn('[payoutService] Admin setup notice:', err);
-    return () => {};
+    fallbackRest();
+    return () => { active = false; };
   }
 }
 
@@ -723,28 +741,46 @@ export async function adminRejectWithdrawal(
 export function subscribeToWithdrawalNotices(
   callback: (notices: TutorWithdrawalRequest[]) => void
 ): () => void {
+  let active = true;
+  const fallbackRest = () => {
+    fetchFirestoreCollectionRest<TutorWithdrawalRequest>('withdrawal_notices')
+      .then((notices) => {
+        if (!active) return;
+        notices.sort(
+          (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+        );
+        callback(notices);
+      })
+      .catch(() => {});
+  };
   try {
     const colRef = collection(db, 'withdrawal_notices');
     const unsubscribe = onSnapshot(
       colRef,
       (snapshot) => {
+        if (!active) return;
         const notices: TutorWithdrawalRequest[] = [];
         snapshot.forEach((d) => {
-          notices.push(d.data() as TutorWithdrawalRequest);
+          notices.push({ id: d.id, ...(d.data() as TutorWithdrawalRequest) });
         });
         notices.sort(
-          (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+          (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
         );
         callback(notices);
       },
       (err) => {
-        console.warn('[payoutService] withdrawal_notices listener notice:', err);
+        console.warn('[payoutService] withdrawal_notices listener notice (using REST fallback):', err);
+        fallbackRest();
       }
     );
-    return () => unsubscribe();
+    return () => {
+      active = false;
+      unsubscribe();
+    };
   } catch (err) {
     console.warn('[payoutService] subscribeToWithdrawalNotices error:', err);
-    return () => {};
+    fallbackRest();
+    return () => { active = false; };
   }
 }
 
@@ -754,29 +790,49 @@ export function subscribeToWithdrawalNotices(
 export function subscribeToCompleteWithdrawals(
   callback: (withdrawals: TutorWithdrawalRequest[]) => void
 ): () => void {
+  let active = true;
+  const fallbackRest = () => {
+    fetchFirestoreCollectionRest<TutorWithdrawalRequest>('complete_withdrawals')
+      .then((list) => {
+        if (!active) return;
+        list.sort(
+          (a, b) =>
+            new Date(b.approvedAt || b.createdAt || 0).getTime() -
+            new Date(a.approvedAt || a.createdAt || 0).getTime()
+        );
+        callback(list);
+      })
+      .catch(() => {});
+  };
   try {
     const colRef = collection(db, 'complete_withdrawals');
     const unsubscribe = onSnapshot(
       colRef,
       (snapshot) => {
+        if (!active) return;
         const list: TutorWithdrawalRequest[] = [];
         snapshot.forEach((d) => {
-          list.push(d.data() as TutorWithdrawalRequest);
+          list.push({ id: d.id, ...(d.data() as TutorWithdrawalRequest) });
         });
         list.sort(
           (a, b) =>
-            new Date(b.approvedAt || b.createdAt).getTime() -
-            new Date(a.approvedAt || a.createdAt).getTime()
+            new Date(b.approvedAt || b.createdAt || 0).getTime() -
+            new Date(a.approvedAt || a.createdAt || 0).getTime()
         );
         callback(list);
       },
       (err) => {
-        console.warn('[payoutService] complete_withdrawals listener notice:', err);
+        console.warn('[payoutService] complete_withdrawals listener notice (using REST fallback):', err);
+        fallbackRest();
       }
     );
-    return () => unsubscribe();
+    return () => {
+      active = false;
+      unsubscribe();
+    };
   } catch (err) {
     console.warn('[payoutService] subscribeToCompleteWithdrawals error:', err);
-    return () => {};
+    fallbackRest();
+    return () => { active = false; };
   }
 }
